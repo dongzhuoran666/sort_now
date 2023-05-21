@@ -103,7 +103,15 @@ async def sortNow():
         sort_final.extend(before_attack_sort_res)
         sort_final.extend(detect_sort_res)
         sort_final_all.append(sort_final)
-    print(sort_final_all)
+
+
+    with open('res.txt', 'w') as f:
+        # 写入每行文本
+        for i in range(len(sort_final_all)):
+            f.write("战机" + str(i)+'\n')
+            for j in sort_final_all[i]:
+                f.write(str(j.__repr__()) + '\n')
+    # print(sort_final_all)
     return sort_final_all
         # print(list(group))
         # sort1 = sorted(ins_list,key=lambda ins: ins.ins_type)

@@ -1,118 +1,130 @@
 import pickle
 from itertools import groupby
 
+import fastapi
 from fastapi import FastAPI
 from typing import Optional, Union
 from GraphObject import *
 import datetime
-from utils import get_short_id, search_enemy_plane, calculate_dis
+from utils import get_short_id, search_enemy_plane, calculate_dis,search_area,search_zhang_plane
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
-app = FastAPI()
+from matplotlib.patches import Circle,Rectangle
+app = FastAPI(default_response_class=fastapi.responses.ORJSONResponse)
 
-ins_list_map = [[],[]]
+ins_list_map = []
 enemy_planes = []
 self_planes = []
 aircraft_carriers = []
-graph = Graph(None,None,None)
+areas = []
+graph = Graph(None,None,None,None)
 
 # def print_list(a):
 #     for i in a:
 #         print(i)
 
 # ins_type_dict = {0:"攻击（发射后）",1:"攻击（发射前）",2:"探测（目标）",3:"探测（区域）"}
-# ins_source_dict = {0:"上级指挥系统",1:"小编队长机飞行员",2:"子编队长机飞行员",3:"起飞前任务规划"}
+# ins_source_dict = {0:"上级指挥系统",1:"起飞前任务规划",2:"小编队长机飞行员",3:"编队自主识别"}
 # target_type_dict = {0:"战斗机",1:"预警机",2:"电子战飞机",3:"运输机"}
 
 @app.get("/sortNow")
 async def sortNow():
     sort_final_all = []
-    for ins_list in ins_list_map:
-        sort_final = []
-        #首先要区分开攻击 探测
-        after_attack = [i for i in ins_list if i.ins_type==0]
-        before_attack = [i for i in ins_list if i.ins_type==1]
-        tance = [i for i in ins_list if i.ins_type==2 or i.ins_type==3]
-        #然后根据指令来源排序
-        after_attack_sort_res = after_attack #忽略，先不排序
-        for source, group in groupby(sorted(after_attack, key=lambda ins: ins.source), key=lambda ins: ins.source):
-            print()
-            # print(list(group))
+    #首先按照来源进行排序
+    all_ins_sort_res = []
+    for source,group in groupby(sorted(ins_list_map, key=lambda ins: ins.source), key=lambda x: x.source):
+        source_ins = list(group)
+        before_attack_order = None
+        ins_type3_res = []
+        ins_type2_res = []
+        ins_type1_res = []
+        ins_type0_res = []
 
-        before_attack_sort_res = []
-        for source, group in groupby(sorted(before_attack, key=lambda ins: ins.source), key=lambda ins: ins.source):
-            #攻击前
-            before_attack_sort_list = []
-            for ins_list_source in list(group):
-                target_id = ins_list_source.target_id
-                # print(target_id)
-                enemy_plane = search_enemy_plane(enemy_planes,target_id)  #获取指令要攻击谁
-                in_attack = False
-                depth = None
-                # out_dis = None
-                min_dis = float("inf")
-                for self_plane in self_planes:
-                    dis = calculate_dis(enemy_plane.x,self_plane.x,enemy_plane.y,self_plane.y)
-                    if dis<enemy_plane.attack_radius:
-                        in_attack = True
-                        depth = enemy_plane.attack_radius - dis
-                    else:
+        for ins_type,type_group in groupby(sorted(source_ins, key=lambda ins: -ins.ins_type), key=lambda x: x.ins_type):
+            # print(list(type_group))
+            #倒过来排序为了照顾发射后需要依照发射前的顺序
+            sort_list = list(type_group)
+            # print(ins_type)
+            if ins_type == 3:
+                print(ins_type)
+                zhang_plane = search_zhang_plane(self_planes) #寻找长机
+                for i in sort_list:
+                    target_area = search_area(areas,i.target)
+                    area_x = target_area.x + 0.5*target_area.width
+                    area_y = target_area.y + 0.5*target_area.height
+                    # print(zhang_plane)
+                    dis = calculate_dis(zhang_plane.x,area_x,zhang_plane.y,area_y) #计算与每个区域中心的距离
+                    i.area_dis = dis
+                sorted_res = sorted(sort_list,
+                                    key=lambda a: (a.area_dis,a.timestamp))
+                ins_type3_res = sorted_res
+            if ins_type == 2:
+                print(ins_type)
+                for i in sort_list:
+                    target_id = i.target
+                    target_palne = search_enemy_plane(enemy_planes,target_id)
+                    min_dis = float('inf')
+                    for j in self_planes:
+                        dis = calculate_dis(j.x,target_palne.x,j.y,target_palne.y)
                         if dis < min_dis:
                             min_dis = dis
-                #目前如果不在攻击区内，假设为离我方飞机越近，越优先
-                if in_attack:
-                    before_attack_sort_list.append(BeforeAttackSort(ins_list_source,in_attack,depth,None))
-                else:
-                    before_attack_sort_list.append(BeforeAttackSort(ins_list_source,in_attack,None,min_dis))
-                # print(before_attack_sort_list)
-             #然后根据攻击区、深度、距离排序
+                    i.min_dis = min_dis
+                    i.target_speed = target_palne.spreed
+                sorted_res = sorted(sort_list,
+                                    key=lambda a: (a.min_dis,-a.target_speed))
+                ins_type2_res = sorted_res
+            if ins_type == 1:
+                print(ins_type)
+                for i in sort_list:
+                    target_id = i.target
+                    target_plane = search_enemy_plane(enemy_planes,target_id)
+                    min_depth = float('inf')
+                    i.in_attack = False
+                    min_attack_time = float('inf')
+                    for j in self_planes:
+                        dis = calculate_dis(j.x,target_plane.x,j.y,target_plane.y)
+                        if dis < target_plane.attack_radius:
+                            i.in_attack = True
+                            if target_plane.attack_radius-dis< min_depth:
+                                min_depth = target_plane.attack_radius-dis
+                    if not i.in_attack:
+                        for j in self_planes:
+                            dis = calculate_dis(j.x, target_plane.x, j.y, target_plane.y)
+                            attack_time = (dis - j.max_attack_distance)/target_plane.spreed
+                            if attack_time<min_attack_time:
+                                min_attack_time = attack_time
+                    i.min_attack_time = min_attack_time
+                    i.min_depth = min_depth
+                sorted_res = sorted(sort_list,
+                                    key=lambda a: (not a.in_attack,-a.min_depth,a.min_attack_time))
+                ins_type1_res = sorted_res
+                before_attack_order = [k.target for k in ins_type1_res]
+            if ins_type == 0:
+                print(ins_type)
+                for i in sort_list:
+                    print("adasda")
+                    target_index = before_attack_order.index(i.target)  #假定攻击后的目标一定出现在攻击前里面
+                    i.target_index = target_index
+                sorted_res = sorted(sort_list,
+                                    key=lambda a: a.target_index)
+                ins_type0_res = sorted_res
 
-            sorted_res = sorted(before_attack_sort_list, key=lambda a : (not a.in_attack,(- a.depth) if a.depth is not None else None,a.dis))
-            before_attack_sort_res.extend(sorted_res)
-        print("攻击前指令排序：")
-        print(before_attack_sort_res)
+        all_ins_sort_res.extend(ins_type0_res)
+        all_ins_sort_res.extend(ins_type1_res)
+        all_ins_sort_res.extend(ins_type2_res)
+        all_ins_sort_res.extend(ins_type3_res)
 
-        detect_sort_res = []
+    print(all_ins_sort_res)
+                    # print(area_x,area_y)
+                    # print(dis)
 
-        #因为目标和区域也有排序标准，只是暂时不考虑而已，因此都放在一起然后排序
-        for source, group in groupby(sorted(tance, key=lambda ins: ins.source), key=lambda ins: ins.source):
-            detect_sort_list= []
-            for ins_list_source in list(group):
-                target_id = ins_list_source.target_id
-                # print(target_id)
-                if ins_list_source.ins_type ==2 : #探测目标
-                    enemy_plane = search_enemy_plane(enemy_planes,target_id)  #获取指令要探测谁
-                    target_type = enemy_plane.target_type
-                    min_dis = float("inf")
-                    for self_plane in self_planes:
-                        dis = calculate_dis(enemy_plane.x, self_plane.x, enemy_plane.y, self_plane.y)
-                        if dis < min_dis:
-                            min_dis = dis
-                    detect_sort_list.append(DetectSort(ins_list_source,target_type,min_dis))
-                if ins_list_source.ins_type ==3 :  #探测区域
-                    #暂时不处理，只根据时间排序，简化
-                    detect_sort_list.append(DetectSort(ins_list_source,None,None))
-
-                # print(detect_sort_list)
-            #先排序目标和区域，然后排序距离，然后排序敌机参数
-            sorted_res = sorted(detect_sort_list, key=lambda a : (a.ins.ins_type,a.dis,a.target_type,a.ins.timestamp))
-            detect_sort_res.extend(sorted_res)
-        print("探测指令排序：")
-        print(detect_sort_res)
-        sort_final.extend(after_attack_sort_res)
-        sort_final.extend(before_attack_sort_res)
-        sort_final.extend(detect_sort_res)
-        sort_final_all.append(sort_final)
 
 
     with open('res.txt', 'w') as f:
         # 写入每行文本
-        for i in range(len(sort_final_all)):
-            f.write("战机" + str(i)+'\n')
-            for j in sort_final_all[i]:
-                f.write(str(j.__repr__()) + '\n')
-    # print(sort_final_all)
-    return sort_final_all
+
+        for j in all_ins_sort_res:
+            f.write(str(j.__repr__()) + '\n')
+    return all_ins_sort_res
         # print(list(group))
         # sort1 = sorted(ins_list,key=lambda ins: ins.ins_type)
 
@@ -122,25 +134,28 @@ async def saveObject():
     #     for j in i:
     #         j.target_id = int(j.target_id)
     with open('datasave.pk', 'wb') as f:
-        pickle.dump((ins_list_map, enemy_planes,self_planes,aircraft_carriers), f)
+        # global   ins_list_map
+        # ins_list_map=[]
+        pickle.dump((ins_list_map, enemy_planes,self_planes,aircraft_carriers,areas), f)
 
 @app.get("/loadObject")
 async def loadObject():
     with open('datasave.pk', 'rb') as f:
-        global ins_list_map, enemy_planes, self_planes, aircraft_carriers
-        ins_list_map, enemy_planes,self_planes,aircraft_carriers = pickle.load(f)
+        global ins_list_map, enemy_planes, self_planes, aircraft_carriers, areas
+        ins_list_map, enemy_planes,self_planes,aircraft_carriers,areas = pickle.load(f)
 
-@app.get("/updateGrqph")
+@app.get("/updateGraph")
 async def updateGraph():
     graph.enemy_planes = enemy_planes
     graph.self_planes = self_planes
     graph.aircraft_carriers = aircraft_carriers
+    graph.areas = areas
 
-@app.get("/drawGrqph")
+@app.get("/drawGraph")
 async def drawGraph():
     fig, ax = plt.subplots()
-    plt.xlim([-100, 200])
-    plt.ylim([-100, 200])
+    plt.xlim([-50, 300])
+    plt.ylim([-100, 300])
     for item in graph.self_planes:
         ax.scatter(item.x, item.y, color='b')
         circle = Circle((item.x, item.y), item.max_attack_distance, color='g',alpha = 0.2)
@@ -155,7 +170,12 @@ async def drawGraph():
         circle = Circle((item.x, item.y), item.defense_radius, color='y',alpha = 0.2)
         ax.add_artist(circle)
 
-    # 设置图形标题和坐标轴标签
+    for item in graph.areas:
+        rect = Rectangle((item.x, item.y), item.width, item.height, linewidth=1, edgecolor = 'r', facecolor = 'none')
+        ax.add_artist(rect)
+
+
+        # 设置图形标题和坐标轴标签
     ax.set_title('2D Coordinate Points with Colors and Circles')
     ax.set_xlabel('X-axis')
     ax.set_ylabel('Y-axis')
@@ -166,27 +186,25 @@ async def drawGraph():
 
 @app.get("/showInstruction")
 async def showInstruction():
-    # print("战机1")
-    for i in range(len(ins_list_map)):
-        print("战机{}指令集合******************".format(str(i+1)))
-        for item in ins_list_map[i]: #我方战机指令集合
-            print(item)
+    print("战机指令集合******************")
+    for item in ins_list_map: #我方战机指令集合
+        print(item)
     # print(ins_list)
 @app.get("/addInstruction")
-async def addInstruction(ins_type: int, source: int, target_id: int, which_plane : int , timestamp: Union[datetime.datetime,None] = None):
+async def addInstruction(ins_type: int, source: int, target_id: int, timestamp: Union[datetime.datetime,None] = None):
     uuid_ge = get_short_id()
     if timestamp is None:
         dt = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         timestamp = dt
     instruction = Instruction(uuid_ge,ins_type,target_id,source,timestamp)
 
-    ins_list_map[which_plane].append(instruction)
+    ins_list_map.append(instruction)
 
 @app.get("/removeInstruction")
-async def removeInstruction(uuid_remove : str,which_plane :int):
-    for item in ins_list_map[which_plane]:
+async def removeInstruction(uuid_remove : str):
+    for item in ins_list_map:
         if item.uuid == uuid_remove:
-            ins_list_map[which_plane].remove(item)
+            ins_list_map.remove(item)
 
 
 @app.post("/enemy_planes/")
@@ -288,4 +306,27 @@ async def delete_aircraft_carrier(aircraft_carrier_id: int):
             return {"message": "Aircraft carrier deleted successfully"}
     return {"message": "Aircraft carrier not found"}
 
+@app.get("/areas")
+async def get_areas():
+    return areas
 
+@app.post("/areas")
+async def create_area(area: Area):
+    areas.append(area)
+    return area
+
+@app.put("/areas/{area_id}")
+async def update_area(area_id: int, area: Area):
+    for i, a in enumerate(areas):
+        if a.area_id == area_id:
+            areas[i] = area
+            return area
+    return {"error": "Area not found"}
+
+@app.delete("/areas/{area_id}")
+async def delete_area(area_id: int):
+    for i, a in enumerate(areas):
+        if a.area_id == area_id:
+            del areas[i]
+            return {"message": "Area deleted successfully"}
+    return {"error": "Area not found"}

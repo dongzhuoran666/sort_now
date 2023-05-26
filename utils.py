@@ -27,3 +27,15 @@ def search_enemy_plane(enemy_planes,enemy_plane_id):
         # print(enemy_plane.target_id)
         if enemy_plane_id == enemy_plane.target_id:
             return enemy_plane
+
+def search_area(areas,area_id):
+    for area in areas:
+        # print(enemy_plane.target_id)
+        if area.area_id == area_id:
+            return area
+
+def search_zhang_plane(self_planes):
+    for plane in self_planes:
+        # print(enemy_plane.target_id)
+        if plane.is_zhang == 1:
+            return plane
